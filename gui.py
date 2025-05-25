@@ -69,6 +69,21 @@ class App:
         self.report_path = tk.StringVar()
         tk.Label(root, text="Путь к отчету:").pack()
         tk.Entry(root, textvariable=self.report_path, width=50).pack()
+        self.image_count_label = tk.Label(root, text="Загружено изображений: 0", fg="red")
+        self.image_count_label.pack(pady=5)
+
+        # Кнопка очистки
+        self.clear_button = tk.Button(root, text="Очистить все", command=self.clear_all)
+        self.clear_button.pack(pady=5)
+
+    def clear_all(self):
+        """Очистка всех загруженных изображений"""
+        for lbl in self.thumbnails:
+            lbl.destroy()
+        self.thumbnails = []
+        self.image_paths = []
+        self.matrix_text.delete(1.0, tk.END)
+        self.update_image_count()
 
     def validate_size(self, value):
         """Валидация ввода размеров"""
@@ -76,69 +91,90 @@ class App:
             return True
         try:
             num = int(value)
-            return 3 <= num <= 100
+            return 1 <= num <= 100
         except ValueError:
             return False
 
     def add_images(self):
-        """Добавление изображений"""
+        """Добавление изображений с защищенным форматированием"""
+        """Исправленная функция добавления изображений"""
         files = filedialog.askopenfilenames(filetypes=[("Изображения", "*.png;*.jpg;*.bmp")])
+        if not files:  # Если пользователь отменил выбор
+            return
+
+        new_images_added = False
         for path in files:
             if path not in self.image_paths:
                 try:
-                    # Загрузка миниатюры
-                    img = Image.open(path).convert('RGB').resize((80, 112))
-                    tk_img = ImageTk.PhotoImage(img)
-                    lbl = tk.Label(self.thumb_frame, image=tk_img)
-                    lbl.image = tk_img
-                    lbl.pack(side="left", padx=5)
-                    self.thumbnails.append(lbl)
-                    self.image_paths.append(path)
-
-                    # Загрузка матрицы
+                    # Загрузка изображения
                     size = (int(self.width_var.get()), int(self.height_var.get()))
                     matrix, vector = load_image_as_matrix_and_vector(path, size)
 
-                    # Вывод в текстовое поле
-                    self.matrix_text.insert(tk.END, f"Изображение {len(self.image_paths)} ({size[0]}x{size[1]}):\n")
-                    self.matrix_text.insert(tk.END, f"Матрица:\n{format_matrix(matrix)}\nВектор:\n")
-
-                    # Подсветка единиц
+                    # Безопасное форматирование
+                    matrix_str = format_matrix(matrix)
                     vector_str = format_vector(vector)
-                    for line in vector_str.split('\n'):
-                        if line.strip() == '1':
-                            self.matrix_text.insert(tk.END, line + '\n', 'highlight')
-                        else:
-                            self.matrix_text.insert(tk.END, line + '\n')
 
-                    self.matrix_text.insert(tk.END, "=" * 50 + "\n")
+                    # Вывод в текстовое поле
+                    self.matrix_text.insert(tk.END, f"Изображение {len(self.image_paths) + 1}:\n")
+                    self.matrix_text.insert(tk.END, f"Матрица:\n{matrix_str}\n")
+                    self.matrix_text.insert(tk.END, "Вектор:\n")
+
+                    # Подсветка
+                    for val in vector_str.split('\n'):
+                        if val.strip() == '1':
+                            self.matrix_text.insert(tk.END, val + '\n', 'highlight')
+                        else:
+                            self.matrix_text.insert(tk.END, val + '\n')
+
+                    self.image_paths.append(path)
+                    self.update_image_count()
 
                 except Exception as e:
-                    messagebox.showerror("Ошибка", f"Не удалось загрузить {path}:\n{str(e)}")
+                    messagebox.showerror("Ошибка", f"Ошибка обработки {path}:\n{str(e)}")
+
+        if new_images_added:
+            self.update_image_count()  # Обновляем счетчик
+            self.matrix_text.see(tk.END)  # Прокручиваем до конца
+
+    def update_image_count(self):
+        """Обновление счетчика изображений"""
+        count = len(self.image_paths)
+        self.image_count_label.config(text=f"Загружено изображений: {count}")
+        # Изменяем цвет текста в зависимости от количества
+        if count < 2:
+            self.image_count_label.config(fg="red")
+        else:
+            self.image_count_label.config(fg="green")
 
     def start_analysis(self):
-        """Запуск анализа"""
+        """Запуск анализа с проверкой"""
         if len(self.image_paths) < 2:
-            messagebox.showerror("Ошибка", "Необходимо минимум 2 изображения")
+            messagebox.showerror("Ошибка",
+                                 f"Загружено {len(self.image_paths)} изображений. Требуется минимум 2.",
+                                 parent=self.root)
             return
 
         try:
             size = (int(self.width_var.get()), int(self.height_var.get()))
-            if size[0] < 3 or size[1] < 3:
-                raise ValueError("Минимальный размер 3x3 пикселя")
-
             threading.Thread(
                 target=self.run_analysis,
                 args=(size,),
                 daemon=True
             ).start()
+        except ValueError as e:
+            messagebox.showerror("Ошибка", str(e), parent=self.root)
 
-        except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
+        except ValueError as e:
+            messagebox.showerror("Ошибка", f"Некорректные параметры: {str(e)}")
 
     def run_analysis(self, size):
-        """Основная логика анализа"""
+        """Логика анализа с обработкой ошибок"""
         try:
+            # Проверяем количество изображений еще раз (на случай параллельных изменений)
+            if len(self.image_paths) < 2:
+                messagebox.showerror("Ошибка", "Количество изображений изменилось. Требуется минимум 2.")
+                return
+
             output_pdf = "analysis_report.pdf"
             self.report_path.set(os.path.abspath(output_pdf))
 
