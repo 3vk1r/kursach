@@ -223,37 +223,42 @@ def covariance_matrix(vectors):
 
 
 def apply_least_squares(A, b):
-    """Метод наименьших квадратов с логированием и проверкой размерностей"""
-    logger.info("Применение метода наименьших квадратов")
+    """Улучшенный метод наименьших квадратов"""
+    logger.debug("Начало МНК")
     try:
-        # Преобразование в numpy array, если это еще не сделано
-        A = np.array(A) if not isinstance(A, np.ndarray) else A
-        b = np.array(b) if not isinstance(b, np.ndarray) else b
+        # Преобразование и проверка входных данных
+        A = np.asarray(A, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
 
-        # Проверка и корректировка размерностей
+        # Корректировка размерностей
         if A.ndim == 1:
-            logger.debug("A одномерный - преобразование в столбец")
             A = A.reshape(-1, 1)
         if b.ndim == 1:
-            logger.debug("b одномерный - преобразование в столбец")
-            b = b.reshape(-1, 1)
+            b = b.reshape(-1)
 
-        logger.debug(f"Матрица A: shape {A.shape}")
-        logger.debug(f"Вектор b: shape {b.shape}")
+        logger.debug(f"Размеры после преобразования: A {A.shape}, b {b.shape}")
 
         # Проверка совместимости размеров
         if A.shape[0] != b.shape[0]:
-            logger.error(f"Несовместимые размеры: A {A.shape}, b {b.shape}")
-            raise ValueError("Размеры A и b по оси 0 должны совпадать")
+            raise ValueError(
+                f"Несовместимые размеры: A {A.shape}, b {b.shape}. "
+                f"Ожидалось A.shape[0] == b.shape[0]"
+            )
 
-        result = np.linalg.lstsq(A, b, rcond=None)[0]
-        logger.info(f"MHK решение получено. Shape: {result.shape}")
+        # Решение системы
+        result, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
+
+        logger.info(
+            f"МНК завершен. Решение: {result.shape}, "
+            f"невязка: {residuals[0] if len(residuals) > 0 else 'нет'}"
+        )
 
         return result
 
     except Exception as e:
-        logger.error(f"Ошибка в MHK: {e}")
+        logger.error(f"Ошибка в МНК: {str(e)}", exc_info=True)
         raise
+
 
 
 def generate_noise_vector(size, scale=1.0):

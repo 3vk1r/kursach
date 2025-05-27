@@ -6,39 +6,60 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk, FigureCanvasTkAgg
 import threading
 import os
+import logging
 from utils import load_image_as_matrix_and_vector, format_matrix, format_vector
 from main_logic import process_images_and_generate_report
 
+# Настройка логирования
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('gui.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 class App:
     def __init__(self, root):
         self.root = root
         root.title("Анализ качества распознавания")
         root.geometry("1200x800")
+        logger.info("Инициализация интерфейса")
 
-        # Валидация ввода
+        # Валидация
         self.validate_cmd = root.register(self.validate_size)
 
         # Панель управления
         control_frame = tk.Frame(root)
         control_frame.pack(pady=10, fill=tk.X)
 
-        # Поля ввода размеров
+        # Поля размеров
         tk.Label(control_frame, text="Ширина (3-100):").grid(row=0, column=0)
         self.width_var = tk.Entry(control_frame, width=5, validate="key",
-                                  validatecommand=(self.validate_cmd, '%P'))
+                                validatecommand=(self.validate_cmd, '%P'))
         self.width_var.grid(row=0, column=1)
         self.width_var.insert(0, "5")
 
         tk.Label(control_frame, text="Высота (3-100):").grid(row=0, column=2)
         self.height_var = tk.Entry(control_frame, width=5, validate="key",
-                                   validatecommand=(self.validate_cmd, '%P'))
+                                 validatecommand=(self.validate_cmd, '%P'))
         self.height_var.grid(row=0, column=3)
         self.height_var.insert(0, "7")
 
+        # Поле уровня шума
+        tk.Label(control_frame, text="Уровень шума:").grid(row=0, column=4)
+        self.noise_scale = tk.DoubleVar(value=3.0)
+        ttk.Scale(control_frame, from_=0.1, to=5.0, variable=self.noise_scale,
+                 orient=tk.HORIZONTAL, length=100).grid(row=0, column=5)
+        ttk.Label(control_frame, textvariable=self.noise_scale).grid(row=0, column=6)
+
         # Кнопки
-        tk.Button(control_frame, text="Добавить изображения", command=self.add_images).grid(row=0, column=4, padx=5)
-        tk.Button(control_frame, text="Анализировать", command=self.start_analysis).grid(row=0, column=5)
+        ttk.Button(control_frame, text="Добавить изображения",
+                  command=self.add_images).grid(row=0, column=7, padx=5)
+        ttk.Button(control_frame, text="Анализировать",
+                  command=self.start_analysis).grid(row=0, column=8)
 
         # Область миниатюр
         self.thumb_frame = tk.Frame(root)
@@ -149,31 +170,30 @@ class App:
     def start_analysis(self):
         """Запуск анализа с проверкой"""
         if len(self.image_paths) < 2:
-            messagebox.showerror("Ошибка",
-                                 f"Загружено {len(self.image_paths)} изображений. Требуется минимум 2.",
-                                 parent=self.root)
+            msg = f"Загружено {len(self.image_paths)} изображений. Требуется минимум 2."
+            logger.error(msg)
+            messagebox.showerror("Ошибка", msg, parent=self.root)
             return
 
         try:
             size = (int(self.width_var.get()), int(self.height_var.get()))
+            noise_level = float(self.noise_scale.get())
+            logger.info(f"Начало анализа. Размер: {size}, Шум: {noise_level}")
+
             threading.Thread(
                 target=self.run_analysis,
-                args=(size,),
+                args=(size, noise_level),
                 daemon=True
             ).start()
+
         except ValueError as e:
+            logger.error(f"Ошибка параметров: {e}")
             messagebox.showerror("Ошибка", str(e), parent=self.root)
 
-        except ValueError as e:
-            messagebox.showerror("Ошибка", f"Некорректные параметры: {str(e)}")
-
-    def run_analysis(self, size):
+    def run_analysis(self, size, noise_level):
         """Логика анализа с обработкой ошибок"""
         try:
-            # Проверяем количество изображений еще раз (на случай параллельных изменений)
-            if len(self.image_paths) < 2:
-                messagebox.showerror("Ошибка", "Количество изображений изменилось. Требуется минимум 2.")
-                return
+            logger.debug(f"Запуск анализа в потоке. Изображений: {len(self.image_paths)}")
 
             output_pdf = "analysis_report.pdf"
             self.report_path.set(os.path.abspath(output_pdf))
@@ -187,17 +207,23 @@ class App:
                 self.image_paths,
                 output_pdf,
                 size,
+                noise_scale=noise_level,
                 progress_callback=callback
             )
 
             self.update_plot(results)
+            logger.info("Анализ успешно завершен")
 
             if os.path.exists(output_pdf):
-                messagebox.showinfo("Готово", f"Отчет сохранен:\n{os.path.abspath(output_pdf)}")
+                msg = f"Отчет сохранен:\n{os.path.abspath(output_pdf)}"
+                logger.info(msg)
+                messagebox.showinfo("Готово", msg)
             else:
+                logger.error("Файл отчета не создан")
                 messagebox.showerror("Ошибка", "Не удалось создать отчет")
 
         except Exception as e:
+            logger.critical(f"Ошибка анализа: {str(e)}", exc_info=True)
             messagebox.showerror("Ошибка", str(e))
 
     def update_plot(self, results):
