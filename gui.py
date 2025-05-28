@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import scrolledtext, filedialog, messagebox
 import tkinter.ttk as ttk
+
+import numpy as np
 from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk, FigureCanvasTkAgg
@@ -118,12 +120,10 @@ class App:
 
     def add_images(self):
         """Добавление изображений с защищенным форматированием"""
-        """Исправленная функция добавления изображений"""
         files = filedialog.askopenfilenames(filetypes=[("Изображения", "*.png;*.jpg;*.bmp")])
         if not files:  # Если пользователь отменил выбор
             return
 
-        new_images_added = False
         for path in files:
             if path not in self.image_paths:
                 try:
@@ -148,14 +148,11 @@ class App:
                             self.matrix_text.insert(tk.END, val + '\n')
 
                     self.image_paths.append(path)
-                    self.update_image_count()
-
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Ошибка обработки {path}:\n{str(e)}")
 
-        if new_images_added:
-            self.update_image_count()  # Обновляем счетчик
-            self.matrix_text.see(tk.END)  # Прокручиваем до конца
+        self.update_image_count()
+        self.matrix_text.see(tk.END)  # Прокручиваем до конца
 
     def update_image_count(self):
         """Обновление счетчика изображений"""
@@ -231,14 +228,26 @@ class App:
         self.figure.clear()
         ax = self.figure.add_subplot(111)
 
-        if 'snr_vs_error' in results and results['snr_vs_error']:
-            snr = [x[0] for x in results['snr_vs_error']]
-            errors = [x[1] for x in results['snr_vs_error']]
-            ax.scatter(snr, errors)
+        if 'statistics' in results and 'snr_error_data' in results['statistics']:
+            # Извлечение данных для графика
+            snr = [x[0] for x in results['statistics']['snr_error_data']]
+            errors = [x[1] for x in results['statistics']['snr_error_data']]
+
+            # Преобразование ошибок в числовой формат
+            errors = [1 if e else 0 for e in errors]
+
+            # Создание графика
+            ax.scatter(snr, errors, alpha=0.5)
             ax.set_xlabel('SNR (дБ)')
-            ax.set_ylabel('Вероятность ошибки')
+            ax.set_ylabel('Факт ошибки (1-ошибка, 0-корректно)')
             ax.set_title('Зависимость ошибок от SNR')
             ax.grid(True)
+
+            # Линия тренда
+            if len(snr) > 1:
+                z = np.polyfit(snr, errors, 1)
+                p = np.poly1d(z)
+                ax.plot(snr, p(snr), "r--")
 
         self.canvas.draw()
 

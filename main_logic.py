@@ -46,8 +46,9 @@ def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=
         'pairwise_analysis': [],
         'statistics': {
             'angles': [],
+            'snr_values': [],
             'error_rates': [],
-            'snr_values': []
+            'snr_error_data': []  # Для хранения данных для графика
         }
     }
 
@@ -91,12 +92,19 @@ def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=
                     # Инициализация структуры для пары
                     pair_info = {
                         'pair_id': pair_id,
-                        'images': {
-                            'source': os.path.basename(img_paths[i]),
-                            'target': os.path.basename(img_paths[j])
+                        'image1': {
+                            'path': img_paths[i],
+                            'index': i + 1,
+                            'name': os.path.basename(img_paths[i])
+                        },
+                        'image2': {
+                            'path': img_paths[j],
+                            'index': j + 1,
+                            'name': os.path.basename(img_paths[j])
                         },
                         'vector_angle': None,
-                        'experiments': []
+                        'error_rate': None,
+                        'avg_snr': None
                     }
 
                     # Получение векторов
@@ -124,7 +132,11 @@ def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=
                     x_ref = apply_least_squares(A, b)
 
                     # Проведение экспериментов с шумом
-                    for exp_num in range(3):
+                    errors = 0
+                    snr_values = []
+                    n_experiments = 100  # Увеличили количество итераций
+
+                    for exp_num in range(n_experiments):
                         try:
                             # Генерация шума
                             current_noise = noise_scale * (0.8 + 0.4 * np.random.rand())
@@ -140,21 +152,25 @@ def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=
                             error = error_occurred(x_ref, x_noisy)
                             snr = signal_to_noise_ratio(v1, noise)
 
-                            # Сохранение результатов эксперимента
-                            experiment = {
-                                'experiment_id': exp_num + 1,
-                                'noise_level': float(current_noise),
-                                'snr': float(snr),
-                                'error': bool(error)
-                            }
+                            # Подсчет ошибок
+                            if error:
+                                errors += 1
+                            snr_values.append(snr)
 
-                            pair_info['experiments'].append(experiment)
-                            results['statistics']['error_rates'].append(error)
-                            results['statistics']['snr_values'].append(snr)
+                            # Сохранение для графика
+                            results['statistics']['snr_error_data'].append((snr, error))
 
                         except Exception as e:
                             logger.error(f"Ошибка эксперимента {exp_num + 1} в паре {pair_id}: {str(e)}")
                             continue
+
+                    # Расчет вероятности ошибки
+                    pair_info['error_rate'] = errors / n_experiments
+                    pair_info['avg_snr'] = np.mean(snr_values) if snr_values else 0
+
+                    # Сохранение результатов эксперимента
+                    results['statistics']['error_rates'].append(pair_info['error_rate'])
+                    results['statistics']['snr_values'].extend(snr_values)
 
                     # Сохранение результатов анализа пары
                     results['pairwise_analysis'].append(pair_info)
@@ -162,7 +178,7 @@ def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=
                     if progress_callback:
                         msg = (f"Пара {pair_id}:\n"
                                f"Угол: {angle:.2f}°\n"
-                               f"Ошибок: {sum(e['error'] for e in pair_info['experiments'])}/3\n"
+                               f"Вероятность ошибки: {pair_info['error_rate']:.2%}\n"
                                "────────────────────\n")
                         progress_callback(msg)
 

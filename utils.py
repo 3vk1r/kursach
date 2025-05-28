@@ -260,7 +260,7 @@ def apply_least_squares(A, b):
         raise
 
 
-
+# ========== ДОБАВЛЕНЫ ПРОПУЩЕННЫЕ ФУНКЦИИ ==========
 def generate_noise_vector(size, scale=1.0):
     """Генерация вектора шума с логированием"""
     logger.debug(f"Генерация шума. Размер: {size}, масштаб: {scale}")
