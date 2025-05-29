@@ -6,197 +6,105 @@ from utils import (
     load_image_as_matrix_and_vector,
     cosine_angle,
     apply_least_squares,
-    generate_noise_vector,
-    add_noise,
-    signal_to_noise_ratio,
-    error_occurred
+    covariance_matrix,
 )
+from report import create_pdf_report
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
-
-def process_images_and_generate_report(img_paths, output_pdf, size, noise_scale=3.0, progress_callback=None):
-    """
-    Основная функция анализа изображений с генерацией отчета
-
-    Параметры:
-    img_paths (list): Список путей к изображениям
-    output_pdf (str): Путь для сохранения PDF-отчета
-    size (tuple): Размер матрицы (ширина, высота)
-    noise_scale (float): Уровень шума (0.1-5.0)
-    progress_callback (function): Функция для передачи сообщений о прогрессе
-
-    Возвращает:
-    dict: Результаты анализа
-    """
-
+def process_images_and_generate_report(img_paths, output_pdf, size, progress_callback=None):
     logger.info("Запуск анализа изображений")
 
-    # Инициализация структуры результатов
+    # Структура результатов
     results = {
         'input_parameters': {
             'image_count': len(img_paths),
             'image_size': size,
-            'noise_level': noise_scale,
             'analysis_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         },
         'matrices': [],
         'vectors': [],
         'pairwise_analysis': [],
-        'statistics': {
-            'angles': [],
-            'snr_values': [],
-            'error_rates': [],
-            'snr_error_data': []  # Для хранения данных для графика
-        }
+        'cov_matrix': None,
+        'statistics': {'angles': []}
     }
 
     try:
-        # Этап 1: Загрузка и подготовка изображений
+        # Загрузка изображений
         if progress_callback:
             progress_callback("Начало загрузки изображений...\n")
 
-        expected_length = size[0] * size[1]
-
+        vectors = []
         for idx, path in enumerate(img_paths):
-            try:
-                # Загрузка изображения
-                matrix, vector = load_image_as_matrix_and_vector(path, size)
+            matrix, vector = load_image_as_matrix_and_vector(path, size)
+            results['matrices'].append(matrix.tolist())
+            results['vectors'].append(vector.tolist())
+            vectors.append(vector)
 
-                # Проверка размера вектора
-                if len(vector) != expected_length:
-                    raise ValueError(f"Некорректный размер вектора: {len(vector)} вместо {expected_length}")
+            if progress_callback:
+                progress_callback(f"Изображение {idx + 1}/{len(img_paths)} загружено\n")
 
-                # Сохранение результатов
-                results['matrices'].append(matrix.tolist())
-                results['vectors'].append(vector)
+        # Вычисление ковариационной матрицы
+        if progress_callback:
+            progress_callback("\nВычисление ковариационной матрицы...\n")
 
-                if progress_callback:
-                    progress_callback(f"Изображение {idx + 1}/{len(img_paths)} загружено\n")
+        cov_matrix = covariance_matrix(vectors)
+        results['cov_matrix'] = cov_matrix.tolist()
 
-            except Exception as e:
-                logger.error(f"Ошибка загрузки {path}: {str(e)}")
-                raise
+        if progress_callback:
+            progress_callback(f"Ковариационная матрица ({cov_matrix.shape[0]}x{cov_matrix.shape[1]}) вычислена\n")
 
-        # Этап 2: Попарный анализ изображений
+        # Попарный анализ
         if progress_callback:
             progress_callback("\nНачало попарного анализа...\n")
 
         for i in range(len(img_paths)):
             for j in range(i + 1, len(img_paths)):
-                pair_id = f"{i + 1}-{j + 1}"
-                pair_info = None
+                pair_info = {
+                    'pair_id': f"{i + 1}-{j + 1}",
+                    'image1_idx': i + 1,
+                    'image2_idx': j + 1,
+                    'vector_angle': None,
+                    'residual': None
+                }
 
                 try:
-                    # Инициализация структуры для пары
-                    pair_info = {
-                        'pair_id': pair_id,
-                        'image1': {
-                            'path': img_paths[i],
-                            'index': i + 1,
-                            'name': os.path.basename(img_paths[i])
-                        },
-                        'image2': {
-                            'path': img_paths[j],
-                            'index': j + 1,
-                            'name': os.path.basename(img_paths[j])
-                        },
-                        'vector_angle': None,
-                        'error_rate': None,
-                        'avg_snr': None
-                    }
+                    v1 = np.array(vectors[i])
+                    v2 = np.array(vectors[j])
 
-                    # Получение векторов
-                    v1 = np.array(results['vectors'][i]).flatten()
-                    v2 = np.array(results['vectors'][j]).flatten()
-
-                    # Проверка размерности
-                    if v1.shape != v2.shape:
-                        raise ValueError(f"Несовпадение размеров векторов: {v1.shape} vs {v2.shape}")
-
-                    # Вычисление угла между векторами
+                    # Вычисление угла
                     angle = cosine_angle(v1, v2)
                     pair_info['vector_angle'] = float(angle)
                     results['statistics']['angles'].append(angle)
 
-                    # Создание матрицы для МНК
+                    # Решение МНК
                     A = np.column_stack([v1, v2])
-                    b = v1.copy()
+                    x = apply_least_squares(A, v1, cov_matrix=cov_matrix)
 
-                    # Проверка размеров матрицы
-                    if A.shape[0] != b.shape[0]:
-                        raise ValueError(f"Несовместимые размеры: A {A.shape}, b {b.shape}")
-
-                    # Эталонное решение
-                    x_ref = apply_least_squares(A, b)
-
-                    # Проведение экспериментов с шумом
-                    errors = 0
-                    snr_values = []
-                    n_experiments = 100  # Увеличили количество итераций
-
-                    for exp_num in range(n_experiments):
-                        try:
-                            # Генерация шума
-                            current_noise = noise_scale * (0.8 + 0.4 * np.random.rand())
-                            noise = generate_noise_vector(v1.size, scale=current_noise)
-
-                            # Добавление шума
-                            noisy_vector = add_noise(v1, noise)
-
-                            # Решение с шумом
-                            x_noisy = apply_least_squares(A, noisy_vector)
-
-                            # Расчет метрик
-                            error = error_occurred(x_ref, x_noisy)
-                            snr = signal_to_noise_ratio(v1, noise)
-
-                            # Подсчет ошибок
-                            if error:
-                                errors += 1
-                            snr_values.append(snr)
-
-                            # Сохранение для графика
-                            results['statistics']['snr_error_data'].append((snr, error))
-
-                        except Exception as e:
-                            logger.error(f"Ошибка эксперимента {exp_num + 1} в паре {pair_id}: {str(e)}")
-                            continue
-
-                    # Расчет вероятности ошибки
-                    pair_info['error_rate'] = errors / n_experiments
-                    pair_info['avg_snr'] = np.mean(snr_values) if snr_values else 0
-
-                    # Сохранение результатов эксперимента
-                    results['statistics']['error_rates'].append(pair_info['error_rate'])
-                    results['statistics']['snr_values'].extend(snr_values)
-
-                    # Сохранение результатов анализа пары
-                    results['pairwise_analysis'].append(pair_info)
+                    # Вычисление невязки
+                    residual = np.linalg.norm(A @ x - v1)
+                    pair_info['residual'] = float(residual)
 
                     if progress_callback:
-                        msg = (f"Пара {pair_id}:\n"
+                        msg = (f"Пара {i + 1}-{j + 1}:\n"
                                f"Угол: {angle:.2f}°\n"
-                               f"Вероятность ошибки: {pair_info['error_rate']:.2%}\n"
+                               f"Невязка: {residual:.4f}\n"
                                "────────────────────\n")
                         progress_callback(msg)
 
                 except Exception as e:
-                    logger.error(f"Ошибка анализа пары {pair_id}: {str(e)}")
-                    if pair_info:
-                        pair_info['error'] = str(e)
-                        results['pairwise_analysis'].append(pair_info)
-                    continue
+                    logger.error(f"Ошибка анализа пары {i + 1}-{j + 1}: {str(e)}")
+                    pair_info['error'] = str(e)
 
-        # Этап 3: Генерация отчета
+                results['pairwise_analysis'].append(pair_info)
+
+        # Генерация отчёта
         if progress_callback:
             progress_callback("\nГенерация отчета...\n")
 
-        from report import create_pdf_report
         create_pdf_report(output_pdf, img_paths, results, size)
-
-        logger.info(f"Отчет успешно сохранен: {output_pdf}")
+        logger.info(f"Отчет сохранен: {output_pdf}")
         return results
 
     except Exception as e:
